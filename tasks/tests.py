@@ -468,3 +468,115 @@ class TaskUpdateEndpointTests(APITestCase):
         
         self.task.refresh_from_db()
         self.assertEqual(self.task.id, original_id)
+
+
+class TaskDeleteEndpointTests(APITestCase):
+
+    def setUp(self):
+        self.task = Task.objects.create(
+            title='Task to Delete',
+            description='This task will be deleted',
+            completed=False
+        )
+        self.delete_url = reverse('task-detail', kwargs={'pk': self.task.id})
+
+    def test_delete_task_successfully(self):
+        response = self.client.delete(self.delete_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Task.objects.filter(id=self.task.id).exists())
+        self.assertEqual(Task.objects.count(), 0)
+
+    def test_delete_nonexistent_task(self):
+        nonexistent_url = reverse('task-detail', kwargs={'pk': 999})
+        response = self.client.delete(nonexistent_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(Task.objects.count(), 1)
+
+    def test_delete_task_with_subtasks(self):
+        subtask1 = Task.objects.create(title='Subtask 1', parent=self.task)
+        subtask2 = Task.objects.create(title='Subtask 2', parent=self.task)
+        
+        response = self.client.delete(self.delete_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Task.objects.filter(id=self.task.id).exists())
+        self.assertFalse(Task.objects.filter(id=subtask1.id).exists())
+        self.assertFalse(Task.objects.filter(id=subtask2.id).exists())
+        self.assertEqual(Task.objects.count(), 0)
+
+    def test_delete_task_with_nested_subtasks(self):
+        child = Task.objects.create(title='Child', parent=self.task)
+        grandchild = Task.objects.create(title='Grandchild', parent=child)
+        
+        response = self.client.delete(self.delete_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Task.objects.filter(id=self.task.id).exists())
+        self.assertFalse(Task.objects.filter(id=child.id).exists())
+        self.assertFalse(Task.objects.filter(id=grandchild.id).exists())
+        self.assertEqual(Task.objects.count(), 0)
+
+    def test_delete_task_removes_from_database(self):
+        task_id = self.task.id
+        response = self.client.delete(self.delete_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        with self.assertRaises(Task.DoesNotExist):
+            Task.objects.get(id=task_id)
+
+    def test_delete_multiple_tasks(self):
+        task1 = Task.objects.create(title='Task 1')
+        task2 = Task.objects.create(title='Task 2')
+        task3 = Task.objects.create(title='Task 3')
+        
+        url1 = reverse('task-detail', kwargs={'pk': task1.id})
+        url2 = reverse('task-detail', kwargs={'pk': task2.id})
+        url3 = reverse('task-detail', kwargs={'pk': task3.id})
+        
+        response1 = self.client.delete(url1)
+        response2 = self.client.delete(url2)
+        response3 = self.client.delete(url3)
+        
+        self.assertEqual(response1.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(response2.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(response3.status_code, status.HTTP_204_NO_CONTENT)
+        
+        self.assertEqual(Task.objects.count(), 1)
+        self.assertTrue(Task.objects.filter(id=self.task.id).exists())
+
+    def test_delete_task_does_not_affect_other_tasks(self):
+        other_task = Task.objects.create(title='Other Task')
+        
+        response = self.client.delete(self.delete_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Task.objects.filter(id=self.task.id).exists())
+        self.assertTrue(Task.objects.filter(id=other_task.id).exists())
+        self.assertEqual(Task.objects.count(), 1)
+
+    def test_delete_task_with_parent(self):
+        parent = Task.objects.create(title='Parent Task')
+        self.task.parent = parent
+        self.task.save()
+        
+        response = self.client.delete(self.delete_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Task.objects.filter(id=self.task.id).exists())
+        self.assertTrue(Task.objects.filter(id=parent.id).exists())
+        self.assertEqual(Task.objects.count(), 1)
+
+    def test_delete_task_response_has_no_content(self):
+        response = self.client.delete(self.delete_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertIsNone(response.data)
+
+    def test_delete_already_deleted_task(self):
+        self.client.delete(self.delete_url)
+        
+        response = self.client.delete(self.delete_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
