@@ -289,3 +289,182 @@ class TaskCreateEndpointTests(APITestCase):
         
         task3 = Task.objects.get(title='Task 3')
         self.assertEqual(task3.completed, True)
+
+
+class TaskUpdateEndpointTests(APITestCase):
+
+    def setUp(self):
+        self.task = Task.objects.create(
+            title='Original Task',
+            description='Original description',
+            completed=False
+        )
+        self.update_url = reverse('task-detail', kwargs={'pk': self.task.id})
+
+    def test_update_task_full_put(self):
+        data = {
+            'title': 'Updated Task',
+            'description': 'Updated description',
+            'completed': True
+        }
+        response = self.client.put(self.update_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.title, 'Updated Task')
+        self.assertEqual(self.task.description, 'Updated description')
+        self.assertEqual(self.task.completed, True)
+        
+        self.assertEqual(response.data['title'], 'Updated Task')
+        self.assertEqual(response.data['description'], 'Updated description')
+        self.assertEqual(response.data['completed'], True)
+
+    def test_update_task_partial_patch(self):
+        data = {
+            'title': 'Partially Updated Task'
+        }
+        response = self.client.patch(self.update_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.title, 'Partially Updated Task')
+        self.assertEqual(self.task.description, 'Original description')
+        self.assertEqual(self.task.completed, False)
+
+    def test_update_task_completed_status(self):
+        data = {
+            'completed': True
+        }
+        response = self.client.patch(self.update_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.completed, True)
+        self.assertEqual(self.task.title, 'Original Task')
+
+    def test_update_task_description_only(self):
+        data = {
+            'description': 'New description'
+        }
+        response = self.client.patch(self.update_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.description, 'New description')
+        self.assertEqual(self.task.title, 'Original Task')
+
+    def test_update_task_with_parent(self):
+        parent = Task.objects.create(title='Parent Task')
+        
+        data = {
+            'parent': parent.id
+        }
+        response = self.client.patch(self.update_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.parent, parent)
+        self.assertEqual(response.data['parent'], parent.id)
+
+    def test_update_task_remove_parent(self):
+        parent = Task.objects.create(title='Parent Task')
+        self.task.parent = parent
+        self.task.save()
+        
+        data = {
+            'parent': None
+        }
+        response = self.client.patch(self.update_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.parent, None)
+        self.assertEqual(response.data['parent'], None)
+
+    def test_update_task_with_invalid_parent(self):
+        data = {
+            'parent': 999
+        }
+        response = self.client.patch(self.update_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('parent', response.data)
+
+    def test_update_task_with_empty_title(self):
+        data = {
+            'title': ''
+        }
+        response = self.client.patch(self.update_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('title', response.data)
+
+    def test_update_task_without_title_put(self):
+        data = {
+            'description': 'Description without title',
+            'completed': True
+        }
+        response = self.client.put(self.update_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('title', response.data)
+
+    def test_update_nonexistent_task(self):
+        nonexistent_url = reverse('task-detail', kwargs={'pk': 999})
+        data = {
+            'title': 'Updated Task'
+        }
+        response = self.client.patch(nonexistent_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_update_task_response_structure(self):
+        data = {
+            'title': 'Updated Task',
+            'description': 'Updated description',
+            'completed': True
+        }
+        response = self.client.put(self.update_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        expected_fields = ['id', 'title', 'description', 'completed', 'parent', 'subtasks', 'created_at', 'updated_at']
+        for field in expected_fields:
+            self.assertIn(field, response.data, f"Field '{field}' missing from response")
+
+    def test_update_task_all_fields_put(self):
+        parent = Task.objects.create(title='Parent Task')
+        data = {
+            'title': 'Fully Updated Task',
+            'description': 'Fully updated description',
+            'completed': True,
+            'parent': parent.id
+        }
+        response = self.client.put(self.update_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.title, 'Fully Updated Task')
+        self.assertEqual(self.task.description, 'Fully updated description')
+        self.assertEqual(self.task.completed, True)
+        self.assertEqual(self.task.parent, parent)
+
+    def test_update_task_preserves_id(self):
+        original_id = self.task.id
+        data = {
+            'title': 'Updated Task'
+        }
+        response = self.client.patch(self.update_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['id'], original_id)
+        
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.id, original_id)
