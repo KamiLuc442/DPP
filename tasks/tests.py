@@ -1,3 +1,291 @@
 from django.test import TestCase
+from rest_framework.test import APITestCase
+from rest_framework import status
+from django.urls import reverse
+from .models import Task
 
-# Create your tests here.
+
+class TaskListEndpointTests(APITestCase):
+
+    def setUp(self):
+        self.list_url = reverse('task-list')
+
+    def test_list_empty_tasks(self):
+        response = self.client.get(self.list_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 0)
+        self.assertEqual(response.data, [])
+
+    def test_list_single_task(self):
+        task = Task.objects.create(
+            title='Single Task',
+            description='A single task',
+            completed=False
+        )
+        
+        response = self.client.get(self.list_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id'], task.id)
+        self.assertEqual(response.data[0]['title'], 'Single Task')
+        self.assertEqual(response.data[0]['description'], 'A single task')
+        self.assertEqual(response.data[0]['completed'], False)
+        self.assertEqual(response.data[0]['parent'], None)
+        self.assertEqual(response.data[0]['subtasks'], [])
+
+    def test_list_multiple_tasks(self):
+        task1 = Task.objects.create(title='Task 1', completed=False)
+        task2 = Task.objects.create(title='Task 2', completed=True)
+        task3 = Task.objects.create(title='Task 3', description='Third task')
+        
+        response = self.client.get(self.list_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 3)
+        
+        task_ids = [task['id'] for task in response.data]
+        self.assertIn(task1.id, task_ids)
+        self.assertIn(task2.id, task_ids)
+        self.assertIn(task3.id, task_ids)
+
+    def test_list_tasks_response_structure(self):
+        Task.objects.create(title='Test Task', description='Test description')
+        
+        response = self.client.get(self.list_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        
+        task_data = response.data[0]
+        expected_fields = ['id', 'title', 'description', 'completed', 'parent', 'subtasks', 'created_at', 'updated_at']
+        for field in expected_fields:
+            self.assertIn(field, task_data, f"Field '{field}' missing from response")
+
+    def test_list_tasks_with_subtasks(self):
+        parent = Task.objects.create(title='Parent Task')
+        subtask1 = Task.objects.create(title='Subtask 1', parent=parent)
+        subtask2 = Task.objects.create(title='Subtask 2', parent=parent)
+        
+        response = self.client.get(self.list_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 3)
+        
+        parent_data = next(task for task in response.data if task['id'] == parent.id)
+        self.assertEqual(len(parent_data['subtasks']), 2)
+        
+        subtask_ids = [subtask['id'] for subtask in parent_data['subtasks']]
+        self.assertIn(subtask1.id, subtask_ids)
+        self.assertIn(subtask2.id, subtask_ids)
+
+    def test_list_tasks_ordering(self):
+        task1 = Task.objects.create(title='First Task')
+        task2 = Task.objects.create(title='Second Task')
+        task3 = Task.objects.create(title='Third Task')
+        
+        response = self.client.get(self.list_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 3)
+        
+        created_dates = [task['created_at'] for task in response.data]
+        self.assertEqual(created_dates, sorted(created_dates, reverse=True))
+
+    def test_list_tasks_includes_all_fields(self):
+        task = Task.objects.create(
+            title='Complete Task',
+            description='Full description',
+            completed=True
+        )
+        
+        response = self.client.get(self.list_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        task_data = response.data[0]
+        
+        self.assertEqual(task_data['title'], 'Complete Task')
+        self.assertEqual(task_data['description'], 'Full description')
+        self.assertEqual(task_data['completed'], True)
+        self.assertIsNotNone(task_data['id'])
+        self.assertIsNotNone(task_data['created_at'])
+        self.assertIsNotNone(task_data['updated_at'])
+
+    def test_list_tasks_with_nested_subtasks(self):
+        parent = Task.objects.create(title='Parent')
+        child = Task.objects.create(title='Child', parent=parent)
+        grandchild = Task.objects.create(title='Grandchild', parent=child)
+        
+        response = self.client.get(self.list_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 3)
+        
+        parent_data = next(task for task in response.data if task['id'] == parent.id)
+        self.assertEqual(len(parent_data['subtasks']), 1)
+        self.assertEqual(parent_data['subtasks'][0]['title'], 'Child')
+        self.assertEqual(len(parent_data['subtasks'][0]['subtasks']), 1)
+        self.assertEqual(parent_data['subtasks'][0]['subtasks'][0]['title'], 'Grandchild')
+
+    def test_list_tasks_mixed_parent_and_orphan(self):
+        orphan1 = Task.objects.create(title='Orphan 1')
+        parent = Task.objects.create(title='Parent')
+        subtask = Task.objects.create(title='Subtask', parent=parent)
+        orphan2 = Task.objects.create(title='Orphan 2')
+        
+        response = self.client.get(self.list_url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 4)
+        
+        parent_data = next(task for task in response.data if task['id'] == parent.id)
+        self.assertEqual(len(parent_data['subtasks']), 1)
+        
+        orphan_tasks = [task for task in response.data if task['parent'] is None and task['id'] != parent.id]
+        self.assertEqual(len(orphan_tasks), 2)
+
+
+class TaskCreateEndpointTests(APITestCase):
+
+    def setUp(self):
+        self.create_url = reverse('task-list')
+
+    def test_create_task_with_minimal_data(self):
+        data = {
+            'title': 'Test Task'
+        }
+        response = self.client.post(self.create_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Task.objects.count(), 1)
+        
+        task = Task.objects.get()
+        self.assertEqual(task.title, 'Test Task')
+        self.assertEqual(task.description, None)
+        self.assertEqual(task.completed, False)
+        self.assertEqual(task.parent, None)
+        
+        self.assertIn('id', response.data)
+        self.assertEqual(response.data['title'], 'Test Task')
+        self.assertEqual(response.data['completed'], False)
+        self.assertIn('created_at', response.data)
+        self.assertIn('updated_at', response.data)
+
+    def test_create_task_with_all_fields(self):
+        data = {
+            'title': 'Complete Task',
+            'description': 'This is a detailed description',
+            'completed': True
+        }
+        response = self.client.post(self.create_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        
+        task = Task.objects.get()
+        self.assertEqual(task.title, 'Complete Task')
+        self.assertEqual(task.description, 'This is a detailed description')
+        self.assertEqual(task.completed, True)
+        
+        self.assertEqual(response.data['title'], 'Complete Task')
+        self.assertEqual(response.data['description'], 'This is a detailed description')
+        self.assertEqual(response.data['completed'], True)
+        self.assertEqual(response.data['subtasks'], [])
+
+    def test_create_task_with_parent(self):
+        parent_task = Task.objects.create(
+            title='Parent Task',
+            description='Parent description'
+        )
+        
+        data = {
+            'title': 'Subtask',
+            'description': 'This is a subtask',
+            'parent': parent_task.id
+        }
+        response = self.client.post(self.create_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Task.objects.count(), 2)
+        
+        subtask = Task.objects.get(title='Subtask')
+        self.assertEqual(subtask.parent, parent_task)
+        self.assertEqual(response.data['parent'], parent_task.id)
+
+    def test_create_task_without_title(self):
+        data = {
+            'description': 'Task without title'
+        }
+        response = self.client.post(self.create_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Task.objects.count(), 0)
+        self.assertIn('title', response.data)
+
+    def test_create_task_with_empty_title(self):
+        data = {
+            'title': ''
+        }
+        response = self.client.post(self.create_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Task.objects.count(), 0)
+
+    def test_create_task_with_invalid_parent(self):
+        data = {
+            'title': 'Task with invalid parent',
+            'parent': 999
+        }
+        response = self.client.post(self.create_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Task.objects.count(), 0)
+        self.assertIn('parent', response.data)
+
+    def test_create_task_with_null_parent(self):
+        data = {
+            'title': 'Task with null parent',
+            'parent': None
+        }
+        response = self.client.post(self.create_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        task = Task.objects.get()
+        self.assertEqual(task.parent, None)
+
+    def test_create_task_response_structure(self):
+        data = {
+            'title': 'Response Test Task',
+            'description': 'Testing response structure'
+        }
+        response = self.client.post(self.create_url, data, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        
+        expected_fields = ['id', 'title', 'description', 'completed', 'parent', 'subtasks', 'created_at', 'updated_at']
+        for field in expected_fields:
+            self.assertIn(field, response.data, f"Field '{field}' missing from response")
+
+        self.assertEqual(response.data['subtasks'], [])
+
+    def test_create_multiple_tasks(self):
+        tasks_data = [
+            {'title': 'Task 1'},
+            {'title': 'Task 2', 'description': 'Second task'},
+            {'title': 'Task 3', 'completed': True}
+        ]
+        
+        for task_data in tasks_data:
+            response = self.client.post(self.create_url, task_data, format='json')
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        
+        self.assertEqual(Task.objects.count(), 3)
+        
+        task1 = Task.objects.get(title='Task 1')
+        self.assertEqual(task1.completed, False)
+        
+        task2 = Task.objects.get(title='Task 2')
+        self.assertEqual(task2.description, 'Second task')
+        
+        task3 = Task.objects.get(title='Task 3')
+        self.assertEqual(task3.completed, True)
